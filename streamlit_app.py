@@ -1,151 +1,145 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report, confusion_matrix
+from xgboost import XGBClassifier
+import joblib
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Application title
+st.title("Professional Telecom Churn Analysis and Prediction")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Load default dataset option
+if st.checkbox("Use example dataset"):
+    data = pd.read_csv('https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv')  # Replace with an actual churn dataset
+    st.write("Using example dataset.")
+else:
+    uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+if uploaded_file or st.checkbox("Use example dataset"):
+    if not st.checkbox("Use example dataset"):
+        data = pd.read_csv(uploaded_file)
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    # Display raw data
+    st.subheader('Raw Data')
+    st.write(data.head())
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    # Data summary
+    st.subheader('Dataset Summary')
+    st.write(data.describe())
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    # Feature selection
+    st.subheader('Feature Selection')
+    selected_features = st.multiselect('Select features for analysis', data.columns.tolist(), default=data.columns.tolist())
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+    # Target selection
+    target_column = st.selectbox("Select target variable", data.columns.tolist(), index=data.columns.tolist().index('Churn'))  # Replace 'Churn' with actual target column
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    # Exploratory data analysis
+    st.subheader('Exploratory Data Analysis')
+    if st.checkbox('Show distribution of target variable'):
+        churn_count = data[target_column].value_counts()
+        st.write(f"Churned: {churn_count[1]}, Not churned: {churn_count[0]}")
+        fig = px.histogram(data, x=target_column, title='Churn Distribution')
+        st.plotly_chart(fig)
 
-    return gdp_df
+    # Data Preparation
+    st.subheader('Data Preparation')
+    # Convert categorical columns to numeric
+    label_encoder = LabelEncoder()
+    for column in selected_features:
+        if data[column].dtype == 'object':
+            data[column] = label_encoder.fit_transform(data[column])
 
-gdp_df = get_gdp_data()
+    # Split the data into features (X) and target (y)
+    X = data[selected_features]
+    y = data[target_column]
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+    # Split ratio input
+    test_size = st.slider('Select test data size (in %)', 10, 50, 20) / 100
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+    # Split data into training and testing
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+    # Model selection
+    st.subheader('Model Selection and Training')
+    model_choice = st.selectbox("Choose a model", ('Random Forest', 'Logistic Regression', 'XGBoost'))
 
-# Add some spacing
-''
-''
+    n_estimators = st.slider('Number of trees for Random Forest', 100, 1000, step=50)
+    learning_rate = st.slider('Learning rate for XGBoost', 0.01, 0.3, step=0.01)
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+    if model_choice == 'Random Forest':
+        model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    elif model_choice == 'Logistic Regression':
+        model = LogisticRegression(random_state=42)
+    else:
+        model = XGBClassifier(learning_rate=learning_rate, use_label_encoder=False, eval_metric='logloss')
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
+    # Train the model
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
 
-countries = gdp_df['Country Code'].unique()
+    # Model evaluation
+    st.subheader('Model Performance')
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
 
-if not len(countries):
-    st.warning("Select at least one country")
+    st.write(f'Accuracy: {accuracy * 100:.2f}%')
+    st.write(f'Precision: {precision:.2f}')
+    st.write(f'Recall: {recall:.2f}')
+    st.write(f'F1 Score: {f1:.2f}')
 
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
+    # Display classification report
+    st.subheader('Classification Report')
+    st.text(classification_report(y_test, y_pred))
 
-''
-''
-''
+    # Confusion Matrix
+    st.subheader('Confusion Matrix')
+    cm = confusion_matrix(y_test, y_pred)
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+    st.pyplot(plt)
 
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
+    # Feature Importance (only for Random Forest)
+    if model_choice == 'Random Forest':
+        st.subheader('Feature Importance')
+        importance = pd.Series(model.feature_importances_, index=selected_features)
+        importance = importance.sort_values(ascending=False)
+        sns.barplot(x=importance, y=importance.index)
+        st.pyplot(plt)
 
-st.header('GDP over time', divider='gray')
+    # Real-Time Prediction
+    st.subheader('Make a Real-Time Prediction')
+    user_input = st.text_input('Enter customer features as comma-separated values')
 
-''
+    if st.button('Predict'):
+        # Convert input into dataframe
+        input_data = [float(x) for x in user_input.split(',')]
+        input_df = pd.DataFrame([input_data], columns=selected_features)
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
+        # Make prediction
+        prediction = model.predict(input_df)
+        st.write(f'The customer is predicted to {"churn" if prediction[0] == 1 else "not churn"}.')
 
-''
-''
+    # Save the trained model
+    if st.button('Save Model'):
+        joblib.dump(model, 'churn_model.pkl')
+        st.write("Model saved successfully!")
 
+    # Recommendations
+    st.subheader('Recommendations Based on Analysis')
+    st.write("""
+    1. New customers are more likely to churn. Offer attractive deals to retain them.
+    2. Provide rewards or gifts for customers with short-term contracts to encourage renewal.
+    3. Long-tenure customers rarely churn, so offer them privileges to maintain loyalty.
+    """)
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# If no file is uploaded
+else:
+    st.write("Please upload a CSV file or use the example dataset to start the analysis.")
